@@ -80,6 +80,12 @@ typedef enum {
     OPSSL_TLS_CHACHA20_POLY1305_SHA256 = 0x1303,
     OPSSL_TLS_AES_128_CCM_SHA256       = 0x1304,
 
+    /* TLS 1.3 extended cipher suites (opssl private-use range) */
+    OPSSL_TLS_AES_256_CCM_SHA384           = 0xC0B0,
+    OPSSL_TLS_AES_256_CCM_8_SHA384         = 0xC0B1,
+    OPSSL_TLS_CAMELLIA_128_GCM_SHA256      = 0xC0B2,
+    OPSSL_TLS_CAMELLIA_256_GCM_SHA384      = 0xC0B3,
+
     /* TLS 1.2 ECDHE */
     OPSSL_TLS_ECDHE_RSA_AES_128_GCM    = 0xC02F,
     OPSSL_TLS_ECDHE_RSA_AES_256_GCM    = 0xC030,

@@ -73,6 +73,38 @@ static const opssl_ciphersuite_info_t cipher_suites[] = {
         16, 12, 8,
         true
     },
+    {
+        OPSSL_TLS_AES_256_CCM_SHA384,
+        "TLS_AES_256_CCM_SHA384",
+        OPSSL_AEAD_AES_256_CCM,
+        OPSSL_HMAC_SHA384,
+        32, 12, 16,
+        true
+    },
+    {
+        OPSSL_TLS_AES_256_CCM_8_SHA384,
+        "TLS_AES_256_CCM_8_SHA384",
+        OPSSL_AEAD_AES_256_CCM_8,
+        OPSSL_HMAC_SHA384,
+        32, 12, 8,
+        true
+    },
+    {
+        OPSSL_TLS_CAMELLIA_256_GCM_SHA384,
+        "TLS_CAMELLIA_256_GCM_SHA384",
+        OPSSL_AEAD_CAMELLIA_256_GCM,
+        OPSSL_HMAC_SHA384,
+        32, 12, 16,
+        true
+    },
+    {
+        OPSSL_TLS_CAMELLIA_128_GCM_SHA256,
+        "TLS_CAMELLIA_128_GCM_SHA256",
+        OPSSL_AEAD_CAMELLIA_128_GCM,
+        OPSSL_HMAC_SHA256,
+        16, 12, 16,
+        true
+    },
 
     /* TLS 1.2 ECDHE cipher suites */
     {

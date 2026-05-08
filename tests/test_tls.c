@@ -1085,13 +1085,14 @@ static void test_psk_resumption(void)
     size_t rms_len = 0;
     const uint8_t *rms = opssl_tls13_get_resumption_master_secret(client_hs, &rms_len);
     ASSERT_NE(rms, NULL, "psk: client has resumption_master_secret");
-    ASSERT_EQ(rms_len, (size_t)32, "psk: RMS is 32 bytes");
+    ASSERT_NE(rms_len, (size_t)0, "psk: RMS has nonzero length");
 
     /* Derive a PSK from the RMS (simulate NewSessionTicket nonce) */
-    uint8_t psk[32];
+    opssl_hmac_algo_t rms_hash = (rms_len == 48) ? OPSSL_HMAC_SHA384 : OPSSL_HMAC_SHA256;
+    uint8_t psk[48];
     uint8_t nonce[4] = {0, 0, 0, 1};
-    opssl_tls13_hkdf_expand_label(psk, 32, rms, 32,
-                                   "resumption", nonce, 4, OPSSL_HMAC_SHA256);
+    opssl_tls13_hkdf_expand_label(psk, rms_len, rms, rms_len,
+                                   "resumption", nonce, 4, rms_hash);
 
     /* Ticket is arbitrary for this test */
     uint8_t ticket[] = "test-ticket-data";
@@ -1102,8 +1103,8 @@ static void test_psk_resumption(void)
     uint8_t server_hs2[4096] = {0};
 
     /* Set PSK on both sides */
-    opssl_tls13_set_psk(client_hs2, psk, 32, ticket, ticket_len);
-    opssl_tls13_set_psk(server_hs2, psk, 32, ticket, ticket_len);
+    opssl_tls13_set_psk(client_hs2, psk, rms_len, ticket, ticket_len);
+    opssl_tls13_set_psk(server_hs2, psk, rms_len, ticket, ticket_len);
 
     /* Client sends ClientHello with PSK extension */
     rc = opssl_tls13_client_handshake(client_hs2, NULL, 0,

@@ -175,10 +175,16 @@ typedef struct {
 #define EXT_SUPPORTED_VERSIONS 43
 #define EXT_KEY_SHARE 51
 
-/* Cipher suites */
-#define TLS_AES_128_GCM_SHA256 0x1301
-#define TLS_AES_256_GCM_SHA384 0x1302
+/* TLS 1.3 cipher suites (IANA + opssl extended) */
+#define TLS_AES_128_GCM_SHA256       0x1301
+#define TLS_AES_256_GCM_SHA384       0x1302
 #define TLS_CHACHA20_POLY1305_SHA256 0x1303
+#define TLS_AES_128_CCM_SHA256       0x1304
+#define TLS_AES_128_CCM_8_SHA256     0x1305
+#define TLS_AES_256_CCM_SHA384       0xC0B0
+#define TLS_AES_256_CCM_8_SHA384     0xC0B1
+#define TLS_CAMELLIA_128_GCM_SHA256  0xC0B2
+#define TLS_CAMELLIA_256_GCM_SHA384  0xC0B3
 
 /* Named groups */
 #define NAMED_GROUP_X25519 0x001D
@@ -225,35 +231,50 @@ static int tls13_get_transcript_hash(tls13_hs_t *hs, uint8_t *out)
     return -1;
 }
 
+static void tls13_set_hash_for_cipher(tls13_hs_t *hs, uint16_t cipher)
+{
+    switch (cipher) {
+    case TLS_AES_256_GCM_SHA384:
+    case TLS_AES_256_CCM_SHA384:
+    case TLS_AES_256_CCM_8_SHA384:
+    case TLS_CAMELLIA_256_GCM_SHA384:
+        hs->hash_algo = OPSSL_HMAC_SHA384;
+        hs->hash_len = 48;
+        break;
+    default:
+        hs->hash_algo = OPSSL_HMAC_SHA256;
+        hs->hash_len = 32;
+        break;
+    }
+}
+
+static const uint16_t tls13_cipher_preference[] = {
+    TLS_AES_256_GCM_SHA384,
+    TLS_CHACHA20_POLY1305_SHA256,
+    TLS_AES_128_GCM_SHA256,
+    TLS_CAMELLIA_256_GCM_SHA384,
+    TLS_CAMELLIA_128_GCM_SHA256,
+    TLS_AES_256_CCM_SHA384,
+    TLS_AES_128_CCM_SHA256,
+    TLS_AES_256_CCM_8_SHA384,
+    TLS_AES_128_CCM_8_SHA256,
+};
+
 static int tls13_select_cipher_suite(uint16_t *cipher, CBS *cipher_suites)
 {
-    /* Simple selection - prefer AES-128-GCM */
-    while (CBS_len(cipher_suites) >= 2) {
-        uint16_t suite;
-        if (!CBS_get_u16(cipher_suites, &suite)) {
-            return -1;
-        }
-
-        if (suite == TLS_AES_128_GCM_SHA256) {
-            *cipher = suite;
-            return 0;
-        }
-    }
-
-    /* Fallback to first supported suite if found */
-    CBS_init(cipher_suites, CBS_data(cipher_suites), CBS_len(cipher_suites));
-    while (CBS_len(cipher_suites) >= 2) {
-        uint16_t suite;
-        if (!CBS_get_u16(cipher_suites, &suite)) {
-            return -1;
-        }
-
-        if (suite == TLS_AES_256_GCM_SHA384 || suite == TLS_CHACHA20_POLY1305_SHA256) {
-            *cipher = suite;
-            return 0;
+    for (size_t i = 0; i < sizeof(tls13_cipher_preference) / sizeof(tls13_cipher_preference[0]); i++) {
+        CBS copy;
+        CBS_init(&copy, CBS_data(cipher_suites), CBS_len(cipher_suites));
+        while (CBS_len(&copy) >= 2) {
+            uint16_t suite;
+            if (!CBS_get_u16(&copy, &suite))
+                break;
+            if (suite == tls13_cipher_preference[i]) {
+                *cipher = suite;
+                return 0;
+            }
         }
     }
-
     return -1;
 }
 
@@ -490,16 +511,7 @@ static int tls13_parse_client_hello(tls13_hs_t *hs, CBS *msg)
     }
 
     hs->cipher = selected_cipher;
-    if (selected_cipher == TLS_AES_128_GCM_SHA256) {
-        hs->hash_algo = OPSSL_HMAC_SHA256;
-        hs->hash_len = 32;
-    } else if (selected_cipher == TLS_AES_256_GCM_SHA384) {
-        hs->hash_algo = OPSSL_HMAC_SHA384;
-        hs->hash_len = 48;
-    } else {
-        hs->hash_algo = OPSSL_HMAC_SHA256;
-        hs->hash_len = 32;
-    }
+    tls13_set_hash_for_cipher(hs, selected_cipher);
 
     /* Initialize both transcript hashes — server might negotiate either */
     opssl_sha256_init(&hs->transcript_sha256);
@@ -625,24 +637,23 @@ static int tls13_build_server_hello(tls13_hs_t *hs, CBB *out)
     }
 
     /* Add key_share extension (ServerHello format: no outer length wrapper) */
-    {
-        CBB ks_ext, ks_entry;
-        if (!CBB_add_u16(&extensions, EXT_KEY_SHARE) ||
-            !CBB_add_u16_length_prefixed(&extensions, &ks_ext) ||
-            !CBB_add_u16(&ks_ext, hs->group) ||
-            !CBB_add_u16_length_prefixed(&ks_ext, &ks_entry) ||
-            !CBB_add_bytes(&ks_entry, hs->ecdh_pub, hs->ecdh_pub_len)) {
-            return -1;
-        }
+    CBB ks_ext, ks_entry;
+    if (!CBB_add_u16(&extensions, EXT_KEY_SHARE) ||
+        !CBB_add_u16_length_prefixed(&extensions, &ks_ext) ||
+        !CBB_add_u16(&ks_ext, hs->group) ||
+        !CBB_add_u16_length_prefixed(&ks_ext, &ks_entry) ||
+        !CBB_add_bytes(&ks_entry, hs->ecdh_pub, hs->ecdh_pub_len)) {
+        return -1;
     }
 
     /* Add pre_shared_key extension if PSK accepted */
+    CBB psk_ext;
     if (hs->psk_accepted) {
-        CBB psk_ext;
         if (!CBB_add_u16(&extensions, 41) ||  /* pre_shared_key */
             !CBB_add_u16_length_prefixed(&extensions, &psk_ext) ||
-            !CBB_add_u16(&psk_ext, 0)) {  /* selected_identity = 0 */
-            return -1;
+            !CBB_add_u16(&psk_ext, 0) ||
+                        !CBB_flush(&extensions)) {  /* selected_identity = 0 */
+                        return -1;
         }
     }
 
@@ -711,10 +722,11 @@ static int tls13_build_certificate(tls13_hs_t *hs, CBB *out)
 
         CBB cert_entry;
         if (!CBB_add_u24_length_prefixed(&cert_list, &cert_entry) ||
-            !CBB_add_bytes(&cert_entry, der, der_len)) {
-            opssl_x509_free(cert);
-            return -1;
-        }
+            !CBB_add_bytes(&cert_entry, der, der_len) ||
+                        !CBB_flush(&cert_list)) {
+                        opssl_x509_free(cert);
+                        return -1;
+                }
 
         if (!CBB_add_u16(&cert_list, 0)) {
             opssl_x509_free(cert);
@@ -818,8 +830,9 @@ alpn_selected:
             !CBB_add_u16_length_prefixed(&extensions, &alpn_ext) ||
             !CBB_add_u16_length_prefixed(&alpn_ext, &alpn_list) ||
             !CBB_add_u8_length_prefixed(&alpn_list, &alpn_entry) ||
-            !CBB_add_bytes(&alpn_entry, (const uint8_t *)hs->alpn, hs->alpn_len))
-            return -1;
+            !CBB_add_bytes(&alpn_entry, (const uint8_t *)hs->alpn, hs->alpn_len) ||
+                        !CBB_flush(&extensions))
+                        return -1;
     }
 
     /* OCSP stapling response (status_request extension) */
@@ -829,8 +842,9 @@ alpn_selected:
             !CBB_add_u16_length_prefixed(&extensions, &ocsp_ext) ||
             !CBB_add_u8(&ocsp_ext, 1) ||  /* status_type: ocsp (1) */
             !CBB_add_u24(&ocsp_ext, (uint32_t)hs->ocsp_response_len) ||
-            !CBB_add_bytes(&ocsp_ext, hs->ocsp_response, hs->ocsp_response_len))
-            return -1;
+            !CBB_add_bytes(&ocsp_ext, hs->ocsp_response, hs->ocsp_response_len) ||
+                        !CBB_flush(&extensions))
+                        return -1;
     }
 
     /* Certificate Transparency SCT list */
@@ -838,16 +852,18 @@ alpn_selected:
         CBB sct_ext;
         if (!CBB_add_u16(&extensions, EXT_SIGNED_CERT_TIMESTAMP) ||
             !CBB_add_u16_length_prefixed(&extensions, &sct_ext) ||
-            !CBB_add_bytes(&sct_ext, hs->sct_list, hs->sct_list_len))
-            return -1;
+            !CBB_add_bytes(&sct_ext, hs->sct_list, hs->sct_list_len) ||
+                        !CBB_flush(&extensions))
+                        return -1;
     }
 
     /* Early data accepted indication */
     if (hs->early_data_accepted) {
         CBB ed_ext;
         if (!CBB_add_u16(&extensions, EXT_EARLY_DATA) ||
-            !CBB_add_u16_length_prefixed(&extensions, &ed_ext))
-            return -1;
+            !CBB_add_u16_length_prefixed(&extensions, &ed_ext) ||
+                        !CBB_flush(&extensions))
+                        return -1;
     }
 
     CBB_flush(out);
@@ -1227,17 +1243,7 @@ static int tls13_parse_server_hello(tls13_hs_t *hs, CBS *msg)
 
     memcpy(hs->server_random, CBS_data(&random), 32);
     hs->cipher = cipher;
-
-    if (cipher == TLS_AES_128_GCM_SHA256) {
-        hs->hash_algo = OPSSL_HMAC_SHA256;
-        hs->hash_len = 32;
-    } else if (cipher == TLS_AES_256_GCM_SHA384) {
-        hs->hash_algo = OPSSL_HMAC_SHA384;
-        hs->hash_len = 48;
-    } else {
-        hs->hash_algo = OPSSL_HMAC_SHA256;
-        hs->hash_len = 32;
-    }
+    tls13_set_hash_for_cipher(hs, cipher);
 
     while (CBS_len(&extensions) > 0) {
         uint16_t ext_type;
@@ -1347,8 +1353,15 @@ int opssl_tls13_client_handshake(void *hs_opaque, uint8_t *buf, size_t buf_len,
             !CBB_add_bytes(&ch_msg, hs->client_random, 32) ||
             !CBB_add_u8(&ch_msg, 0) ||
             !CBB_add_u16_length_prefixed(&ch_msg, &cipher_suites) ||
-            !CBB_add_u16(&cipher_suites, TLS_AES_128_GCM_SHA256) ||
             !CBB_add_u16(&cipher_suites, TLS_AES_256_GCM_SHA384) ||
+            !CBB_add_u16(&cipher_suites, TLS_CHACHA20_POLY1305_SHA256) ||
+            !CBB_add_u16(&cipher_suites, TLS_AES_128_GCM_SHA256) ||
+            !CBB_add_u16(&cipher_suites, TLS_CAMELLIA_256_GCM_SHA384) ||
+            !CBB_add_u16(&cipher_suites, TLS_CAMELLIA_128_GCM_SHA256) ||
+            !CBB_add_u16(&cipher_suites, TLS_AES_256_CCM_SHA384) ||
+            !CBB_add_u16(&cipher_suites, TLS_AES_128_CCM_SHA256) ||
+            !CBB_add_u16(&cipher_suites, TLS_AES_256_CCM_8_SHA384) ||
+            !CBB_add_u16(&cipher_suites, TLS_AES_128_CCM_8_SHA256) ||
             !CBB_add_u8_length_prefixed(&ch_msg, &compression) ||
             !CBB_add_u8(&compression, 0) ||
             !CBB_add_u16_length_prefixed(&ch_msg, &extensions)) {
@@ -1413,10 +1426,11 @@ int opssl_tls13_client_handshake(void *hs_opaque, uint8_t *buf, size_t buf_len,
                 !CBB_add_u16_length_prefixed(&sni_ext, &sni_list) ||
                 !CBB_add_u8(&sni_list, 0) ||  /* host_name type */
                 !CBB_add_u16_length_prefixed(&sni_list, &sni_entry) ||
-                !CBB_add_bytes(&sni_entry, (const uint8_t *)hs->sni, sni_len)) {
-                CBB_cleanup(&cbb);
-                return OPSSL_ERROR;
-            }
+                !CBB_add_bytes(&sni_entry, (const uint8_t *)hs->sni, sni_len) ||
+                                !CBB_flush(&extensions)) {
+                                CBB_cleanup(&cbb);
+                                return OPSSL_ERROR;
+                        }
         }
 
         /* ALPN extension (RFC 7301) */
@@ -1426,10 +1440,11 @@ int opssl_tls13_client_handshake(void *hs_opaque, uint8_t *buf, size_t buf_len,
                 !CBB_add_u16_length_prefixed(&extensions, &alpn_ext) ||
                 !CBB_add_u16_length_prefixed(&alpn_ext, &alpn_list) ||
                 !CBB_add_bytes(&alpn_list, (const uint8_t *)hs->alpn_offer,
-                              hs->alpn_offer_len)) {
-                CBB_cleanup(&cbb);
-                return OPSSL_ERROR;
-            }
+                              hs->alpn_offer_len) ||
+                                !CBB_flush(&extensions)) {
+                                CBB_cleanup(&cbb);
+                                return OPSSL_ERROR;
+                        }
         }
 
         /* status_request extension (OCSP stapling) */
@@ -1455,10 +1470,11 @@ int opssl_tls13_client_handshake(void *hs_opaque, uint8_t *buf, size_t buf_len,
         CBB ed_ext;
         if (hs->has_psk && hs->psk_len > 0 && hs->early_data_max > 0) {
             if (!CBB_add_u16(&extensions, EXT_EARLY_DATA) ||
-                !CBB_add_u16_length_prefixed(&extensions, &ed_ext)) {
-                CBB_cleanup(&cbb);
-                return OPSSL_ERROR;
-            }
+                !CBB_add_u16_length_prefixed(&extensions, &ed_ext) ||
+                                !CBB_flush(&extensions)) {
+                                CBB_cleanup(&cbb);
+                                return OPSSL_ERROR;
+                        }
             hs->early_data_offered = true;
         }
 
@@ -1477,10 +1493,11 @@ int opssl_tls13_client_handshake(void *hs_opaque, uint8_t *buf, size_t buf_len,
                 !CBB_add_u32(&identities, 0) ||  /* ticket_age = 0 for fresh */
                 !CBB_add_u16_length_prefixed(&psk_ext, &binders) ||
                 !CBB_add_u8(&binders, (uint8_t)hs->psk_len) ||
-                !CBB_add_bytes(&binders, hs->psk, hs->psk_len)) { /* placeholder */
-                CBB_cleanup(&cbb);
-                return OPSSL_ERROR;
-            }
+                !CBB_add_bytes(&binders, hs->psk, hs->psk_len) ||
+                                !CBB_flush(&extensions)) { /* placeholder */
+                                CBB_cleanup(&cbb);
+                                return OPSSL_ERROR;
+                        }
         }
 
         if (!cbb_finish_to_buf(&cbb, out, out_len, out_cap)) {

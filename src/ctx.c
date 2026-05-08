@@ -23,7 +23,7 @@ extern int opssl_pem_decode(const char *pem, size_t pem_len,
 
 /* TLS context structure definition */
 struct opssl_ctx {
-    int refcount;
+    _Atomic int refcount;
 
     /* Version bounds */
     opssl_tls_version_t min_version;

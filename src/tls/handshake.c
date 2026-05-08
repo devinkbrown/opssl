@@ -773,15 +773,17 @@ keylog_emit(opssl_conn_t *conn, const char *label,
     opssl_keylog_cb cb = opssl_ctx_get_keylog_callback(conn->ctx, &ud);
     if (!cb) return;
 
-    char line[256];
+    char line[512];
     int off = snprintf(line, sizeof(line), "%s ", label);
+    if (off < 0 || (size_t)off >= sizeof(line)) return;
 
-    for (int i = 0; i < 32; i++)
+    for (int i = 0; i < 32 && (size_t)off < sizeof(line) - 2; i++)
         off += snprintf(line + off, sizeof(line) - off, "%02x", client_random[i]);
 
-    off += snprintf(line + off, sizeof(line) - off, " ");
+    if ((size_t)off < sizeof(line) - 1)
+        off += snprintf(line + off, sizeof(line) - off, " ");
 
-    for (size_t i = 0; i < secret_len; i++)
+    for (size_t i = 0; i < secret_len && (size_t)off < sizeof(line) - 2; i++)
         off += snprintf(line + off, sizeof(line) - off, "%02x", secret[i]);
 
     cb(line, ud);
@@ -1589,7 +1591,10 @@ static opssl_result_t read_record(opssl_conn_t *conn, uint8_t *type,
             aad[8] = *type;                         /* content type */
             aad[9] = 0x03; aad[10] = 0x03;         /* version */
             /* For TLS 1.2, plaintext length = ciphertext length - tag length */
-            size_t tag_len = opssl_aead_tag_len(OPSSL_AEAD_AES_256_GCM);
+            opssl_aead_algo_t wr_aead = OPSSL_AEAD_AES_256_GCM;
+            size_t tag_len = 16;
+            if (opssl_ciphersuite_get_params(conn->cipher, &wr_aead, NULL, NULL, NULL, &tag_len) && tag_len == 0)
+                tag_len = 16;
             size_t plaintext_len = record_len - tag_len;
             aad[11] = (plaintext_len >> 8) & 0xff;
             aad[12] = plaintext_len & 0xff;
@@ -1674,6 +1679,11 @@ static opssl_result_t write_record(opssl_conn_t *conn, uint8_t type,
         uint8_t inner_plaintext[16384 + 1];
         const uint8_t *pt = data;
         size_t pt_len = len;
+
+        if (len > 16384) {
+            conn->last_error = OPSSL_ERR_PROTOCOL;
+            return OPSSL_ERROR;
+        }
 
         if (conn->is_tls13) {
             memcpy(inner_plaintext, data, len);
@@ -1937,10 +1947,12 @@ static void tls13_setup_handshake_cipher(opssl_conn_t *conn)
         return;
     }
 
+#ifdef OPSSL_DEBUG_SECRETS
     {
         extern void opssl_tls13_debug_dump_secrets(void *hs);
         opssl_tls13_debug_dump_secrets(conn->hs_buf);
     }
+#endif
 
     setup_cipher_contexts(conn, client_key, ckl, server_key, skl,
                          client_iv, cil, server_iv, sil, cipher);
@@ -2345,6 +2357,10 @@ int
 opssl_conn_set_session(opssl_conn_t *conn, const opssl_session_t *sess)
 {
     if (!conn || !sess || sess->ticket_len == 0)
+        return 0;
+    if (sess->psk_len > sizeof(conn->ticket_psk))
+        return 0;
+    if (sess->ticket_len > sizeof(conn->session_ticket))
         return 0;
 
     memcpy(conn->ticket_psk, sess->psk, sess->psk_len);

@@ -153,11 +153,16 @@ All primitives are real implementations, not wrappers around another library.
 
 ### Cipher suites
 
-TLS 1.3:
-- `TLS_AES_128_GCM_SHA256`
+TLS 1.3 (9 cipher suites):
 - `TLS_AES_256_GCM_SHA384`
 - `TLS_CHACHA20_POLY1305_SHA256`
+- `TLS_AES_128_GCM_SHA256`
+- `TLS_AES_128_CCM_SHA256`
 - `TLS_AES_128_CCM_8_SHA256`
+- `TLS_AES_256_CCM_SHA384` (opssl extended)
+- `TLS_AES_256_CCM_8_SHA384` (opssl extended)
+- `TLS_CAMELLIA_128_GCM_SHA256` (opssl extended)
+- `TLS_CAMELLIA_256_GCM_SHA384` (opssl extended)
 
 TLS 1.2 (ECDHE / DHE):
 - `ECDHE-RSA-AES128-GCM-SHA256`
