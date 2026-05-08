@@ -109,6 +109,7 @@ typedef struct {
     bool ccs_sent;                /* CCS has been sent for this side */
 
     const opssl_pkey_t *sign_key;  /* server's long-term signing key (from ctx) */
+    const opssl_x509_chain_t *cert_chain;  /* server's certificate chain */
 
     /* Peer certificate (leaf only, for verification) */
     uint8_t *peer_cert_der;
@@ -493,6 +494,56 @@ found:
 }
 
 /*
+ * Build TLS 1.2 Certificate message body (just the certificate_list, without
+ * the handshake header byte + length — those are added by the caller).
+ */
+static int
+build_server_certificate(tls12_hs_t *hs, opssl_cbb_t *cbb)
+{
+    opssl_cbb_t msg_body, cert_list;
+
+    if (!opssl_cbb_add_u24_length_prefixed(cbb, &msg_body))
+        return 0;
+
+    if (!hs->cert_chain || opssl_x509_chain_count(hs->cert_chain) == 0) {
+        if (!opssl_cbb_add_u24(&msg_body, 0))
+            return 0;
+        opssl_cbb_flush(cbb);
+        return 1;
+    }
+
+    if (!opssl_cbb_add_u24_length_prefixed(&msg_body, &cert_list))
+        return 0;
+
+    size_t count = opssl_x509_chain_count(hs->cert_chain);
+    for (size_t i = 0; i < count; i++) {
+        opssl_x509_t *cert = opssl_x509_chain_get(hs->cert_chain, i);
+        if (!cert)
+            return 0;
+
+        const uint8_t *der;
+        size_t der_len;
+        if (!opssl_x509_get_der(cert, &der, &der_len)) {
+            opssl_x509_free(cert);
+            return 0;
+        }
+
+        opssl_cbb_t cert_entry;
+        if (!opssl_cbb_add_u24_length_prefixed(&cert_list, &cert_entry) ||
+            !opssl_cbb_add_bytes(&cert_entry, der, der_len) ||
+            !opssl_cbb_flush(&cert_list)) {
+            opssl_x509_free(cert);
+            return 0;
+        }
+
+        opssl_x509_free(cert);
+    }
+
+    opssl_cbb_flush(cbb);
+    return 1;
+}
+
+/*
  * Build ServerHello message.
  */
 static int
@@ -736,8 +787,7 @@ opssl_tls12_server_handshake(void *hs_opaque, uint8_t *buf, size_t buf_len,
                 int r1 = opssl_cbb_add_u8(&cbb, TLS_MT_SERVER_HELLO);
                 int r2 = r1 ? build_server_hello(hs, &cbb) : 0;
                 int r3 = r2 ? opssl_cbb_add_u8(&cbb, TLS_MT_CERTIFICATE) : 0;
-                int r4 = r3 ? opssl_cbb_add_u24(&cbb, 3) : 0;
-                int r5 = r4 ? opssl_cbb_add_u24(&cbb, 0) : 0;
+                int r5 = r3 ? build_server_certificate(hs, &cbb) : 0;
                 int r6 = r5 ? opssl_cbb_add_u8(&cbb, TLS_MT_SERVER_KEY_EXCHANGE) : 0;
                 int r7 = r6 ? build_server_key_exchange(hs, &cbb) : 0;
                 int r8 = r7 ? opssl_cbb_add_u8(&cbb, TLS_MT_SERVER_HELLO_DONE) : 0;
@@ -1431,6 +1481,14 @@ opssl_tls12_set_sign_key(void *hs_opaque, const opssl_pkey_t *key)
     tls12_hs_t *hs = (tls12_hs_t *)hs_opaque;
     if (hs)
         hs->sign_key = key;
+}
+
+void
+opssl_tls12_set_cert_chain(void *hs_opaque, const opssl_x509_chain_t *chain)
+{
+    tls12_hs_t *hs = (tls12_hs_t *)hs_opaque;
+    if (hs)
+        hs->cert_chain = chain;
 }
 
 void

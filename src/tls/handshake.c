@@ -1794,6 +1794,10 @@ static opssl_result_t handle_tls12_handshake(opssl_conn_t *conn)
             opssl_pkey_t *key = opssl_ctx_get_private_key(conn->ctx);
             if (key)
                 opssl_tls12_set_sign_key(conn->hs_buf, key);
+            extern void opssl_tls12_set_cert_chain(void *, const opssl_x509_chain_t *);
+            opssl_x509_chain_t *chain = opssl_ctx_get_cert_chain(conn->ctx);
+            if (chain)
+                opssl_tls12_set_cert_chain(conn->hs_buf, chain);
             if (alpn_protos && alpn_count > 0)
                 opssl_tls12_set_alpn_supported(conn->hs_buf, alpn_protos, alpn_count);
         } else {

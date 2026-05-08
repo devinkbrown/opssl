@@ -722,11 +722,10 @@ static int tls13_build_certificate(tls13_hs_t *hs, CBB *out)
 
         CBB cert_entry;
         if (!CBB_add_u24_length_prefixed(&cert_list, &cert_entry) ||
-            !CBB_add_bytes(&cert_entry, der, der_len) ||
-                        !CBB_flush(&cert_list)) {
-                        opssl_x509_free(cert);
-                        return -1;
-                }
+            !CBB_add_bytes(&cert_entry, der, der_len)) {
+            opssl_x509_free(cert);
+            return -1;
+        }
 
         if (!CBB_add_u16(&cert_list, 0)) {
             opssl_x509_free(cert);
@@ -763,11 +762,17 @@ static int tls13_build_certificate_verify(tls13_hs_t *hs, CBB *out,
             return -1;
     } else {
         uint8_t digest[48];
-        size_t dlen = (hash_len == 48) ? 48 : 32;
-        if (dlen == 32)
+        size_t dlen;
+        if (ktype == OPSSL_PKEY_EC) {
+            dlen = 32;
             opssl_sha256(context, context_len, digest);
-        else
+        } else if (hash_len == 48) {
+            dlen = 48;
             opssl_sha384(context, context_len, digest);
+        } else {
+            dlen = 32;
+            opssl_sha256(context, context_len, digest);
+        }
         if (!opssl_pkey_sign(hs->sign_key, digest, dlen, sig, &sig_len))
             return -1;
     }
@@ -991,7 +996,6 @@ int opssl_tls13_server_handshake(void *hs_opaque, uint8_t *buf, size_t buf_len,
     }
 
     case OPSSL_HS_FINISHED: {
-        /* Build server flight: EE [+ Certificate + CertificateVerify] + Finished */
         uint8_t flight[8192];
         size_t flight_len = 0;
 
@@ -1050,9 +1054,8 @@ int opssl_tls13_server_handshake(void *hs_opaque, uint8_t *buf, size_t buf_len,
             if (hs->sign_key) {
                 uint8_t transcript_hash[48];
                 int hlen = tls13_get_transcript_hash(hs, transcript_hash);
-                if (hlen < 0) {
+                if (hlen < 0)
                     return OPSSL_ERROR;
-                }
                 CBB cv_cbb;
                 uint8_t cv_buf[512];
                 size_t cv_len;
