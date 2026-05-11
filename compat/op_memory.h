@@ -3,10 +3,17 @@
  *
  * Provides the same allocation API as libop's op_memory.h: all allocators
  * abort on failure via op_outofmemory(), so callers never check for NULL.
+ *
+ * When the real libop op_memory.h has already been included (LIBOP_MEMORY_H
+ * is defined), this file is a no-op.
  */
 
-#ifndef OP_MEMORY_H
-#define OP_MEMORY_H
+#ifdef LIBOP_MEMORY_H
+/* Real libop is present — skip compat stubs */
+#else
+
+#ifndef OP_MEMORY_COMPAT_H
+#define OP_MEMORY_COMPAT_H
 
 #include <stdlib.h>
 #include <string.h>
@@ -59,4 +66,5 @@ op_free(void *ptr)
     free(ptr);
 }
 
-#endif /* OP_MEMORY_H */
+#endif /* OP_MEMORY_COMPAT_H */
+#endif /* !LIBOP_MEMORY_H */

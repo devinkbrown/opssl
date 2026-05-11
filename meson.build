@@ -108,6 +108,62 @@ conf.set('OPSSL_HAVE_ARC4RANDOM', have_arc4random)
 conf.set('OPSSL_HAVE_EXPLICIT_BZERO', cc.has_function('explicit_bzero', prefix: '#include <string.h>'))
 conf.set('OPSSL_HAVE_MEMSET_S', cc.has_function('memset_s', prefix: '#define __STDC_WANT_LIB_EXT1__ 1\n#include <string.h>'))
 
+# System CA certificate bundle detection
+# Distros install ca-certificates in different locations.
+_ca_cert_file = get_option('ca_cert_file')
+_ca_cert_dir = get_option('ca_cert_dir')
+
+if _ca_cert_file == 'auto'
+  _ca_file_candidates = [
+    '/etc/ssl/certs/ca-certificates.crt',     # Debian, Ubuntu, Arch, Gentoo
+    '/etc/pki/tls/certs/ca-bundle.crt',       # RHEL, CentOS, Fedora
+    '/etc/ssl/ca-bundle.pem',                 # openSUSE
+    '/usr/local/share/certs/ca-root-nss.crt', # FreeBSD
+    '/etc/ssl/cert.pem',                      # Alpine, macOS
+    '/usr/share/ssl/certs/ca-bundle.crt',     # older RHEL
+    '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem', # RHEL 7+ p11-kit
+  ]
+  _ca_cert_file = ''
+  foreach f : _ca_file_candidates
+    if import('fs').exists(f)
+      _ca_cert_file = f
+      break
+    endif
+  endforeach
+  if _ca_cert_file != ''
+    message('Auto-detected CA bundle: ' + _ca_cert_file)
+  else
+    warning('No system CA bundle found — opssl_ctx_load_default_verify_paths() will fail at runtime')
+  endif
+endif
+
+if _ca_cert_dir == 'auto'
+  _ca_dir_candidates = [
+    '/etc/ssl/certs',                # Debian, Ubuntu, Arch
+    '/etc/pki/tls/certs',            # RHEL, CentOS, Fedora
+    '/usr/local/share/certs',        # FreeBSD
+    '/usr/share/ca-certificates',    # Debian (raw)
+    '/etc/ca-certificates/extracted', # Arch p11-kit
+  ]
+  _ca_cert_dir = ''
+  foreach d : _ca_dir_candidates
+    if import('fs').exists(d)
+      _ca_cert_dir = d
+      break
+    endif
+  endforeach
+  if _ca_cert_dir != ''
+    message('Auto-detected CA directory: ' + _ca_cert_dir)
+  endif
+endif
+
+if _ca_cert_file != ''
+  conf.set_quoted('OPSSL_DEFAULT_CA_FILE', _ca_cert_file)
+endif
+if _ca_cert_dir != ''
+  conf.set_quoted('OPSSL_DEFAULT_CA_DIR', _ca_cert_dir)
+endif
+
 configure_file(output: 'opssl_config.h', configuration: conf)
 
 # Core library sources (init, error, context)
@@ -131,6 +187,8 @@ crypto_src = files(
   'src/crypto/hmac.c',
   'src/crypto/hkdf.c',
   'src/crypto/pbkdf2.c',
+  'src/crypto/blake2b.c',
+  'src/crypto/argon2id.c',
   'src/crypto/aes.c',
   'src/crypto/aes_gcm.c',
   'src/crypto/aes_ccm.c',
@@ -148,6 +206,7 @@ crypto_src = files(
 
 if opt_postquantum.allowed()
   crypto_src += files('src/crypto/mlkem.c')
+  crypto_src += files('src/crypto/mldsa.c')
 endif
 
 if have_aesni
@@ -179,6 +238,7 @@ x509_src = files(
   'src/x509/fingerprint.c',
   'src/x509/asn1.c',
   'src/x509/pkey.c',
+  'src/x509/trust_store.c',
 )
 
 # I/O and session management

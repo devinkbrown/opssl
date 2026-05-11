@@ -78,7 +78,10 @@ src/crypto/
   ed25519.c      Ed25519 sign/verify (extended twisted Edwards)
   rsa.c          RSA (CRT, blinding, PKCS#1 v1.5, PSS)
   dh.c           Finite-field DH (FFDHE-2048/3072/4096)
-  mlkem.c        ML-KEM-768/1024 (NTT-based, post-quantum)
+  mlkem.c        ML-KEM-512/768/1024 (FIPS 203, NTT-based, post-quantum)
+  mldsa.c        ML-DSA-65 (FIPS 204, post-quantum digital signatures)
+  argon2id.c     Argon2id password hashing (RFC 9106)
+  blake2b.c      BLAKE2b hash function (RFC 7693)
   cpuid.c        CPU feature detection (AES-NI, AVX2, SHA-NI, ARM crypto)
   random.c       CSPRNG (getrandom/getentropy/arc4random)
   constant_time.c   constant-time comparison and selection
@@ -103,6 +106,7 @@ src/x509/
   fingerprint.c  certificate fingerprinting (SHA1/256/512, SHA3, SPKI)
   asn1.c         ASN.1 DER parser
   pkey.c         private key loading (RSA, EC, Ed25519)
+  trust_store.c  trusted CA store for chain validation
 
 src/io/
   bio.c          BIO abstraction for custom I/O
@@ -115,13 +119,13 @@ All primitives are real implementations, not wrappers around another library.
 
 | Category | Algorithms |
 |----------|------------|
-| Hash | SHA-1, SHA-256, SHA-384, SHA-512, SHA3-256, SHA3-512, SHAKE-128/256 |
+| Hash | SHA-1, SHA-256, SHA-384, SHA-512, SHA3-256, SHA3-512, SHAKE-128/256, BLAKE2b |
 | MAC | HMAC-SHA-256/384/512 |
-| KDF | HKDF (RFC 5869), PBKDF2 (RFC 2898) |
+| KDF | HKDF (RFC 5869), PBKDF2 (RFC 2898), Argon2id (RFC 9106) |
 | AEAD | AES-128/256-GCM, ChaCha20-Poly1305, AES-128/256-CCM, AES-128/256-CCM_8, Camellia-128/256-GCM |
 | Key exchange | X25519, P-256, P-384, FFDHE-2048/3072/4096 |
-| Signatures | Ed25519, ECDSA (P-256/P-384), RSA (PKCS#1 v1.5, PSS) |
-| Post-quantum | ML-KEM-768, ML-KEM-1024 (hybrid with X25519 or P-256/P-384) |
+| Signatures | Ed25519, ECDSA (P-256/P-384), RSA (PKCS#1 v1.5, PSS), ML-DSA-65 (FIPS 204) |
+| Post-quantum | ML-KEM-768/1024 (FIPS 203), ML-DSA-65 (FIPS 204) |
 | X.509 | DER/PEM parsing, chain verification, CRL, OCSP, fingerprinting |
 | Encoding | Base64 (standard + URL-safe) |
 
@@ -269,7 +273,7 @@ opssl_x25519_keygen(priv, pub);
 
 Three test suites:
 
-- `test_crypto` — hash, HMAC, HKDF, PBKDF2, AEAD (AES-GCM, ChaCha20-Poly1305, AES-CCM, Camellia-GCM), X25519, Ed25519, ECDSA, RSA, ML-KEM
+- `test_crypto` — SHA-256/512, SHA-1, SHA3-256/512, SHAKE-128/256, BLAKE2b, HMAC, HKDF, PBKDF2, Argon2id, AEAD (AES-GCM, ChaCha20-Poly1305, AES-CCM, Camellia-GCM), X25519, Ed25519, ECDSA, ECDH, RSA, ML-DSA-65, ML-KEM, FFDHE, Base64, constant-time ops, hardware acceleration
 - `test_tls` — TLS protocol handshake and record layer
 - `test_x509` — certificate parsing, chain verification, fingerprinting
 

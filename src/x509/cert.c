@@ -429,7 +429,7 @@ int opssl_x509_get_san(const opssl_x509_t *cert, int idx, char *buf, size_t len)
         return 0;
     }
 
-    strcpy(buf, cert->sans[idx]);
+    snprintf(buf, len, "%s", cert->sans[idx]);
     return 1;
 }
 

@@ -134,7 +134,14 @@ typedef struct {
     /* Client's received ALPN from ClientHello (for server selection) */
     char alpn_client[128];
     size_t alpn_client_len;
+
+    bool tls13_capable;  /* server supports TLS 1.3 — apply downgrade sentinel */
 } tls12_hs_t;
+
+/* RFC 8446 §4.1.3 downgrade sentinel: "DOWNGRD\x01" for TLS 1.2 negotiation */
+static const uint8_t tls13_downgrade_sentinel[8] = {
+    0x44, 0x4F, 0x57, 0x4E, 0x47, 0x52, 0x44, 0x01
+};
 
 /*
  * TLS 1.2 PRF implementation (RFC 5246 §5)
@@ -690,9 +697,21 @@ build_server_key_exchange(tls12_hs_t *hs, opssl_cbb_t *cbb)
     memcpy(sig_input + 68, hs->ecdh_pub, hs->ecdh_pub_len);
     sig_input_len = 68 + hs->ecdh_pub_len;
 
-    /* Hash the signature input */
-    uint8_t digest[32];
-    opssl_sha256(sig_input, sig_input_len, digest);
+    /*
+     * Hash the signature input.
+     * TLS 1.2 SKE uses the PRF-aligned hash: SHA-384 for P-384 cipher suites,
+     * SHA-256 for everything else.  The hash byte in the on-wire
+     * SignatureAndHashAlgorithm field must match the digest actually produced.
+     */
+    uint8_t digest[OPSSL_SHA384_DIGEST_LEN];  /* 48 bytes -- fits SHA-256 and SHA-384 */
+    size_t digest_len;
+    if (hs->group == OPSSL_GROUP_SECP384R1) {
+        opssl_sha384(sig_input, sig_input_len, digest);
+        digest_len = OPSSL_SHA384_DIGEST_LEN;
+    } else {
+        opssl_sha256(sig_input, sig_input_len, digest);
+        digest_len = OPSSL_SHA256_DIGEST_LEN;
+    }
 
     /* Sign with the server's long-term key from the TLS context */
     if (!hs->sign_key) {
@@ -700,18 +719,29 @@ build_server_key_exchange(tls12_hs_t *hs, opssl_cbb_t *cbb)
         return 0;
     }
 
-    if (!opssl_pkey_sign(hs->sign_key, digest, 32, signature, &sig_len)) {
+    if (!opssl_pkey_sign(hs->sign_key, digest, digest_len, signature, &sig_len)) {
         OPSSL_ERR(OPSSL_ERR_CRYPTO, 0);
         return 0;
     }
 
-    /* Select signature algorithm based on key type */
-    uint16_t sig_algo = OPSSL_SIG_ECDSA_SECP256R1;
+    /*
+     * Select SignatureAndHashAlgorithm (RFC 5246 ss7.4.1.4.1).
+     * For ECDSA keys the hash byte must match the digest used above:
+     *   P-384 group -> SHA-384 + ECDSA -> OPSSL_SIG_ECDSA_SECP384R1 (0x0503)
+     *   others      -> SHA-256 + ECDSA -> OPSSL_SIG_ECDSA_SECP256R1 (0x0403)
+     * RSA-PSS: opssl_pkey_sign hardcodes SHA-256 internally -> 0x0804.
+     * Ed25519: pure signature scheme, hash byte not applicable -> 0x0807.
+     */
+    uint16_t sig_algo;
     opssl_pkey_type_t ktype = opssl_pkey_type(hs->sign_key);
     if (ktype == OPSSL_PKEY_RSA)
-        sig_algo = 0x0804;  /* rsa_pss_rsae_sha256 */
+        sig_algo = OPSSL_SIG_RSA_PSS_SHA256;
     else if (ktype == OPSSL_PKEY_ED25519)
-        sig_algo = 0x0807;  /* ed25519 */
+        sig_algo = OPSSL_SIG_ED25519;
+    else if (hs->group == OPSSL_GROUP_SECP384R1)
+        sig_algo = OPSSL_SIG_ECDSA_SECP384R1;
+    else
+        sig_algo = OPSSL_SIG_ECDSA_SECP256R1;
 
     /* Add signature to message */
     if (!opssl_cbb_add_u16(&ske, sig_algo) ||
@@ -776,6 +806,10 @@ opssl_tls12_server_handshake(void *hs_opaque, uint8_t *buf, size_t buf_len,
 
             /* Generate server random */
             opssl_random_bytes(hs->server_random, 32);
+
+            /* RFC 8446 §4.1.3: embed downgrade sentinel when TLS 1.3 capable */
+            if (hs->tls13_capable)
+                memcpy(hs->server_random + 24, tls13_downgrade_sentinel, 8);
 
             *consumed = 4 + msg_len;
             hs->state = OPSSL_HS_SERVER_HELLO;
@@ -1039,6 +1073,45 @@ opssl_tls12_client_handshake(void *hs_opaque, uint8_t *buf, size_t buf_len,
                     }
                 }
 
+                /*
+                 * supported_groups extension (RFC 4492 / RFC 8422).
+                 * Advertise P-256, P-384, and X25519 to allow the server to
+                 * select any of the three groups.  The order signals preference.
+                 */
+                {
+                    opssl_cbb_t sg_ext, sg_list;
+                    if (!opssl_cbb_add_u16(&extensions, TLS_EXT_SUPPORTED_GROUPS) ||
+                        !opssl_cbb_add_u16_length_prefixed(&extensions, &sg_ext) ||
+                        !opssl_cbb_add_u16_length_prefixed(&sg_ext, &sg_list) ||
+                        !opssl_cbb_add_u16(&sg_list, OPSSL_GROUP_SECP256R1) ||
+                        !opssl_cbb_add_u16(&sg_list, OPSSL_GROUP_SECP384R1) ||
+                        !opssl_cbb_add_u16(&sg_list, OPSSL_GROUP_X25519) ||
+                        !opssl_cbb_flush(&sg_ext)) {
+                        ret = OPSSL_ERROR;
+                        break;
+                    }
+                }
+
+                /*
+                 * signature_algorithms extension (RFC 5246 ss7.4.1.4.1).
+                 * Required for TLS 1.2 ECDHE; tells the server which
+                 * SignatureAndHashAlgorithm pairs we accept on the SKE.
+                 */
+                {
+                    opssl_cbb_t sa_ext, sa_list;
+                    if (!opssl_cbb_add_u16(&extensions, TLS_EXT_SIGNATURE_ALGORITHMS) ||
+                        !opssl_cbb_add_u16_length_prefixed(&extensions, &sa_ext) ||
+                        !opssl_cbb_add_u16_length_prefixed(&sa_ext, &sa_list) ||
+                        !opssl_cbb_add_u16(&sa_list, OPSSL_SIG_ECDSA_SECP256R1) ||
+                        !opssl_cbb_add_u16(&sa_list, OPSSL_SIG_ECDSA_SECP384R1) ||
+                        !opssl_cbb_add_u16(&sa_list, OPSSL_SIG_RSA_PSS_SHA256) ||
+                        !opssl_cbb_add_u16(&sa_list, OPSSL_SIG_ED25519) ||
+                        !opssl_cbb_flush(&sa_ext)) {
+                        ret = OPSSL_ERROR;
+                        break;
+                    }
+                }
+
                 if (!opssl_cbb_flush(&ch_body)) {
                     ret = OPSSL_ERROR;
                     break;
@@ -1147,6 +1220,17 @@ opssl_tls12_client_handshake(void *hs_opaque, uint8_t *buf, size_t buf_len,
                                     }
                                 }
                             }
+                        }
+                    }
+
+                    /* RFC 8446 §4.1.3: detect downgrade attack via sentinel */
+                    {
+                        static const uint8_t dg12[8] = {0x44,0x4F,0x57,0x4E,0x47,0x52,0x44,0x01};
+                        static const uint8_t dg11[8] = {0x44,0x4F,0x57,0x4E,0x47,0x52,0x44,0x00};
+                        if (memcmp(hs->server_random + 24, dg12, 8) == 0 ||
+                            memcmp(hs->server_random + 24, dg11, 8) == 0) {
+                            ret = OPSSL_ERROR;
+                            goto client_done;
                         }
                     }
                     break;
@@ -1555,6 +1639,13 @@ opssl_tls12_get_alpn(void *hs_opaque)
     return NULL;
 }
 
+opssl_named_group_t
+opssl_tls12_get_group(void *hs_opaque)
+{
+    tls12_hs_t *hs = (tls12_hs_t *)hs_opaque;
+    return hs ? hs->group : (opssl_named_group_t)0;
+}
+
 /*
  * RFC 5705 keying material exporter for TLS 1.2.
  * PRF(master_secret, label, client_random + server_random + context_value)
@@ -1609,4 +1700,12 @@ opssl_tls12_free_peer_cert(void *hs_opaque)
         hs->peer_cert_der = NULL;
         hs->peer_cert_der_len = 0;
     }
+}
+
+void
+opssl_tls12_set_tls13_capable(void *hs_opaque, bool capable)
+{
+    tls12_hs_t *hs = (tls12_hs_t *)hs_opaque;
+    if (hs)
+        hs->tls13_capable = capable;
 }

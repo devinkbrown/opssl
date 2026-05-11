@@ -98,6 +98,11 @@ struct opssl_ctx {
     void *dtls_cookie_gen_cb;
     void *dtls_cookie_verify_cb;
     void *dtls_cookie_userdata;
+
+    /* Server-wide HMAC key for DTLS cookie generation and verification.
+     * Generated once at ctx creation. Same key used by both generate and verify,
+     * so cookies are deterministic for a given client address + random. */
+    uint8_t dtls_cookie_secret[32];
 };
 
 /* Default cipher suites (TLS 1.3 first, then strong ECDHE TLS 1.2) */
@@ -181,6 +186,12 @@ opssl_ctx_new(opssl_tls_version_t min_version)
 
     /* Generate random session ticket keys */
     if (opssl_random_bytes(ctx->ticket_keys, sizeof(ctx->ticket_keys)) != 0) {
+        op_free(ctx);
+        return NULL;
+    }
+
+    /* Generate DTLS cookie HMAC key (server-wide, lives for ctx lifetime) */
+    if (opssl_random_bytes(ctx->dtls_cookie_secret, sizeof(ctx->dtls_cookie_secret)) != 0) {
         op_free(ctx);
         return NULL;
     }
@@ -416,6 +427,44 @@ opssl_ctx_load_verify_locations(opssl_ctx_t *ctx, const char *ca_file, const cha
         result = 0;
 
     return result;
+}
+
+int
+opssl_ctx_load_default_verify_paths(opssl_ctx_t *ctx)
+{
+    if (!ctx) {
+        opssl_set_error(OPSSL_ERR_INVALID_ARGUMENT, NULL);
+        return 0;
+    }
+
+    const char *ca_file = NULL;
+    const char *ca_dir = NULL;
+
+    /* Environment overrides take priority (matches OpenSSL convention) */
+    const char *env_file = getenv("SSL_CERT_FILE");
+    const char *env_dir = getenv("SSL_CERT_DIR");
+
+    if (env_file && env_file[0])
+        ca_file = env_file;
+    if (env_dir && env_dir[0])
+        ca_dir = env_dir;
+
+    /* Fall back to meson-detected system paths */
+#ifdef OPSSL_DEFAULT_CA_FILE
+    if (!ca_file)
+        ca_file = OPSSL_DEFAULT_CA_FILE;
+#endif
+#ifdef OPSSL_DEFAULT_CA_DIR
+    if (!ca_dir)
+        ca_dir = OPSSL_DEFAULT_CA_DIR;
+#endif
+
+    if (!ca_file && !ca_dir) {
+        opssl_set_error(OPSSL_ERR_IO, "no system CA bundle found");
+        return 0;
+    }
+
+    return opssl_ctx_load_verify_locations(ctx, ca_file, ca_dir);
 }
 
 void
@@ -789,6 +838,12 @@ opssl_x509_chain_t *
 opssl_ctx_get_cert_chain(opssl_ctx_t *ctx)
 {
     return ctx ? ctx->cert_chain : NULL;
+}
+
+const uint8_t *
+opssl_ctx_get_dtls_cookie_secret(const opssl_ctx_t *ctx)
+{
+    return ctx ? ctx->dtls_cookie_secret : NULL;
 }
 
 /* Session cache mode */

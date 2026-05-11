@@ -660,12 +660,14 @@ ssize_t opssl_write(opssl_conn_t *conn, const void *buf, size_t len)
             chunk_size = TLS_MAX_RECORD_LEN;
         }
 
+        uint64_t seq_before = conn->write_seq;
         opssl_result_t result = write_record(conn, TLS_RT_APPLICATION_DATA,
                                            data + written, chunk_size);
         if (result == OPSSL_WANT_WRITE) {
-            if (written > 0) {
-                return written; /* Partial write */
-            }
+            if (conn->write_seq != seq_before)
+                written += chunk_size;
+            if (written > 0)
+                return (ssize_t)written;
             errno = EAGAIN;
             return -1;
         } else if (result != OPSSL_OK) {
@@ -725,31 +727,6 @@ opssl_result_t opssl_conn_send_alert(opssl_conn_t *conn,
     }
 
     return OPSSL_OK;
-}
-
-/* TLS 1.3 downgrade protection sentinels (RFC 8446 §4.1.3) */
-static const uint8_t tls13_downgrade_tls12[8] = {
-    0x44, 0x4F, 0x57, 0x4E, 0x47, 0x52, 0x44, 0x01
-};
-static const uint8_t tls13_downgrade_tls11[8] = {
-    0x44, 0x4F, 0x57, 0x4E, 0x47, 0x52, 0x44, 0x00
-};
-
-__attribute__((unused))
-static void
-apply_downgrade_sentinel(uint8_t server_random[32], opssl_tls_version_t negotiated)
-{
-    if (negotiated == OPSSL_TLS_1_2) {
-        memcpy(server_random + 24, tls13_downgrade_tls12, 8);
-    }
-}
-
-__attribute__((unused))
-static bool
-check_downgrade_sentinel(const uint8_t server_random[32])
-{
-    return memcmp(server_random + 24, tls13_downgrade_tls12, 8) == 0 ||
-           memcmp(server_random + 24, tls13_downgrade_tls11, 8) == 0;
 }
 
 /* Middlebox compatibility: send fake ChangeCipherSpec (RFC 8446 Appendix D.4) */
@@ -1800,6 +1777,9 @@ static opssl_result_t handle_tls12_handshake(opssl_conn_t *conn)
                 opssl_tls12_set_cert_chain(conn->hs_buf, chain);
             if (alpn_protos && alpn_count > 0)
                 opssl_tls12_set_alpn_supported(conn->hs_buf, alpn_protos, alpn_count);
+            extern void opssl_tls12_set_tls13_capable(void *, bool);
+            if (opssl_ctx_supports_version(conn->ctx, OPSSL_TLS_1_3))
+                opssl_tls12_set_tls13_capable(conn->hs_buf, true);
         } else {
             if (conn->sni[0])
                 opssl_tls12_set_sni(conn->hs_buf, conn->sni);
@@ -1889,6 +1869,10 @@ static opssl_result_t handle_tls12_handshake(opssl_conn_t *conn)
                 conn->sni[len] = '\0';
             }
         }
+
+        /* Copy negotiated group from handshake state to connection */
+        extern opssl_named_group_t opssl_tls12_get_group(void *);
+        conn->group = opssl_tls12_get_group(conn->hs_buf);
 
         /* Copy negotiated ALPN from handshake state to connection */
         const char *hs_alpn = opssl_tls12_get_alpn(conn->hs_buf);
