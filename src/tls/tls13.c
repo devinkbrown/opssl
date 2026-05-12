@@ -783,22 +783,26 @@ static int tls13_build_certificate_verify(tls13_hs_t *hs, CBB *out,
     const char *label = hs->is_server
         ? "TLS 1.3, server CertificateVerify"
         : "TLS 1.3, client CertificateVerify";
+    size_t label_len = strlen(label);
 
-    uint8_t context[150];
+    uint8_t context[200];
     memset(context, 0x20, 64);
-    memcpy(context + 64, label, 33);
-    context[97] = 0;
-    memcpy(context + 98, transcript_hash, hash_len);
-    size_t context_len = 98 + hash_len;
+    memcpy(context + 64, label, label_len);
+    context[64 + label_len] = 0;
+    memcpy(context + 64 + label_len + 1, transcript_hash, hash_len);
+    size_t context_len = 64 + label_len + 1 + hash_len;
 
     uint8_t sig[512];
     size_t sig_len = sizeof(sig);
 
     opssl_pkey_type_t ktype = opssl_pkey_type(hs->sign_key);
+    size_t key_bits = opssl_pkey_bits(hs->sign_key);
 
     uint16_t sig_scheme;
     if (ktype == OPSSL_PKEY_ED25519)
         sig_scheme = 0x0807;
+    else if (ktype == OPSSL_PKEY_EC && key_bits >= 384)
+        sig_scheme = 0x0503;
     else if (ktype == OPSSL_PKEY_EC)
         sig_scheme = 0x0403;
     else
@@ -807,8 +811,12 @@ static int tls13_build_certificate_verify(tls13_hs_t *hs, CBB *out,
     if (ktype == OPSSL_PKEY_ED25519) {
         if (!opssl_pkey_sign(hs->sign_key, context, context_len, sig, &sig_len))
             return -1;
+    } else if (sig_scheme == 0x0503) {
+        uint8_t digest[48];
+        opssl_sha384(context, context_len, digest);
+        if (!opssl_pkey_sign(hs->sign_key, digest, 48, sig, &sig_len))
+            return -1;
     } else {
-        /* Hash content with the signature scheme's hash, not the transcript hash */
         uint8_t digest[32];
         opssl_sha256(context, context_len, digest);
         if (!opssl_pkey_sign(hs->sign_key, digest, 32, sig, &sig_len))
@@ -951,6 +959,7 @@ int opssl_tls13_server_handshake(void *hs_opaque, uint8_t *buf, size_t buf_len,
                                 size_t out_cap)
 {
     tls13_hs_t *hs = (tls13_hs_t *)hs_opaque;
+    hs->is_server = true;
     *consumed = 0;
     *out_len = 0;
 
@@ -1803,13 +1812,14 @@ int opssl_tls13_client_handshake(void *hs_opaque, uint8_t *buf, size_t buf_len,
                     const char *cv_label = hs->is_server
                         ? "TLS 1.3, client CertificateVerify"
                         : "TLS 1.3, server CertificateVerify";
+                    size_t cv_label_len = strlen(cv_label);
 
-                    uint8_t context[150];
+                    uint8_t context[200];
                     memset(context, 0x20, 64);
-                    memcpy(context + 64, cv_label, 33);
-                    context[97] = 0;
-                    memcpy(context + 98, cv_hash, (size_t)cv_hash_len);
-                    size_t context_len = 98 + (size_t)cv_hash_len;
+                    memcpy(context + 64, cv_label, cv_label_len);
+                    context[64 + cv_label_len] = 0;
+                    memcpy(context + 64 + cv_label_len + 1, cv_hash, (size_t)cv_hash_len);
+                    size_t context_len = 64 + cv_label_len + 1 + (size_t)cv_hash_len;
 
                     CBS cv_msg;
                     CBS_init(&cv_msg, buf + offset + 4, msg_len);
@@ -1859,6 +1869,27 @@ int opssl_tls13_client_handshake(void *hs_opaque, uint8_t *buf, size_t buf_len,
                         uint8_t unused;
                         if (opssl_asn1_get_bit_string(&spki_cbs, &pub_bits, &unused)) {
                             opssl_ecdsa_ctx_t *ecdsa = opssl_ecdsa_new(OPSSL_CURVE_P256);
+                            if (ecdsa) {
+                                if (opssl_ecdsa_set_public(ecdsa,
+                                        opssl_cbs_data(&pub_bits),
+                                        opssl_cbs_len(&pub_bits)) == 1) {
+                                    verified = opssl_ecdsa_verify(ecdsa,
+                                            digest, sizeof(digest),
+                                            sig_data, sig_len_field);
+                                }
+                                opssl_ecdsa_free(ecdsa);
+                            }
+                        }
+                    } else if (sig_scheme == 0x0503) {
+                        uint8_t digest[48];
+                        opssl_sha384(context, context_len, digest);
+
+                        opssl_cbs_t spki_cbs, alg_id, pub_bits;
+                        opssl_cbs_init(&spki_cbs, spki, spki_len);
+                        opssl_asn1_get_sequence(&spki_cbs, &alg_id);
+                        uint8_t unused;
+                        if (opssl_asn1_get_bit_string(&spki_cbs, &pub_bits, &unused)) {
+                            opssl_ecdsa_ctx_t *ecdsa = opssl_ecdsa_new(OPSSL_CURVE_P384);
                             if (ecdsa) {
                                 if (opssl_ecdsa_set_public(ecdsa,
                                         opssl_cbs_data(&pub_bits),

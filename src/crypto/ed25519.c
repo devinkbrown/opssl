@@ -1224,7 +1224,7 @@ int opssl_ed25519_keygen(uint8_t pk[32], uint8_t sk[64])
     if (have_seed) {
         memcpy(seed, sk, 32);
     } else {
-        if (!opssl_random_bytes(seed, 32))
+        if (opssl_random_bytes(seed, 32) != 0)
             return 0;
     }
 
