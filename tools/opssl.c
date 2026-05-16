@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 /*
  * opssl.c — unified opssl CLI tool with complete subcommand functionality.
  *
@@ -18,6 +20,10 @@
 #include <sys/time.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <poll.h>
+#include <signal.h>
 
 /* Forward declare only the functions we need from opssl */
 
@@ -103,8 +109,49 @@ extern size_t opssl_aead_key_len(opssl_aead_algo_t algo);
 extern size_t opssl_aead_nonce_len(opssl_aead_algo_t algo);
 extern size_t opssl_aead_tag_len(opssl_aead_algo_t algo);
 
+/* TLS context and connection */
+typedef enum {
+    OPSSL_TLS_1_2 = 0x0303,
+    OPSSL_TLS_1_3 = 0x0304,
+} opssl_tls_version_cli_t;
+
+typedef enum {
+    OPSSL_DIR_OUTBOUND = 1,
+} opssl_direction_cli_t;
+
+typedef enum {
+    OPSSL_OK_CLI         =  1,
+    OPSSL_ERROR_CLI      =  0,
+    OPSSL_WANT_READ_CLI  = -2,
+    OPSSL_WANT_WRITE_CLI = -3,
+    OPSSL_CLOSED_CLI     = -4,
+} opssl_result_cli_t;
+
+typedef struct opssl_ctx  opssl_ctx_t;
+typedef struct opssl_conn opssl_conn_t;
+
+extern opssl_ctx_t  *opssl_ctx_new(int min_version);
+extern void          opssl_ctx_free(opssl_ctx_t *ctx);
+extern void          opssl_ctx_set_min_version(opssl_ctx_t *ctx, int ver);
+extern void          opssl_ctx_set_max_version(opssl_ctx_t *ctx, int ver);
+extern int           opssl_ctx_load_default_verify_paths(opssl_ctx_t *ctx);
+extern int           opssl_ctx_load_verify_locations(opssl_ctx_t *ctx, const char *ca_file, const char *ca_dir);
+
+extern opssl_conn_t *opssl_conn_new(opssl_ctx_t *ctx, int fd, int dir);
+extern void          opssl_conn_free(opssl_conn_t *conn);
+extern int           opssl_conn_set_sni(opssl_conn_t *conn, const char *hostname);
+extern int           opssl_connect(opssl_conn_t *conn);
+extern ssize_t       opssl_read(opssl_conn_t *conn, void *buf, size_t len);
+extern ssize_t       opssl_write(opssl_conn_t *conn, const void *buf, size_t len);
+extern int           opssl_conn_version(opssl_conn_t *conn);
+extern const char   *opssl_conn_cipher_name(opssl_conn_t *conn);
+extern int           opssl_conn_get_last_want(opssl_conn_t *conn);
+extern const char   *opssl_conn_get_error_string(opssl_conn_t *conn);
+
 /* X.509 certificate types */
 typedef struct opssl_x509 opssl_x509_t;
+
+extern opssl_x509_t *opssl_conn_get_peer_cert(opssl_conn_t *conn);
 typedef struct opssl_x509_chain opssl_x509_chain_t;
 typedef struct opssl_x509_store opssl_x509_store_t;
 
@@ -1217,6 +1264,253 @@ static int cmd_verifier(int argc, char **argv)
     return 0;
 }
 
+/* ─── TLS Connect (s_client equivalent) ─────────────────────────────────── */
+
+static volatile sig_atomic_t connect_running = 1;
+
+static void connect_sigint(int sig)
+{
+    (void)sig;
+    connect_running = 0;
+}
+
+static const char *tls_version_name(int ver)
+{
+    switch (ver) {
+        case 0x0303: return "TLSv1.2";
+        case 0x0304: return "TLSv1.3";
+        default:     return "unknown";
+    }
+}
+
+static int tcp_connect(const char *host, const char *port)
+{
+    struct addrinfo hints = {0}, *res, *rp;
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    int err = getaddrinfo(host, port, &hints, &res);
+    if (err != 0) {
+        fprintf(stderr, "Error: %s\n", gai_strerror(err));
+        return -1;
+    }
+
+    int fd = -1;
+    for (rp = res; rp; rp = rp->ai_next) {
+        fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (fd < 0) continue;
+        if (connect(fd, rp->ai_addr, rp->ai_addrlen) == 0) break;
+        close(fd);
+        fd = -1;
+    }
+
+    freeaddrinfo(res);
+
+    if (fd < 0) {
+        fprintf(stderr, "Error: failed to connect to %s:%s\n", host, port);
+    }
+
+    return fd;
+}
+
+static int cmd_connect(int argc, char **argv)
+{
+    const char *sni = NULL;
+    const char *ca_file = NULL;
+    int force_tls12 = 0;
+    int force_tls13 = 0;
+    int quiet = 0;
+    const char *target = NULL;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-sni") == 0 && i + 1 < argc) {
+            sni = argv[++i];
+        } else if (strcmp(argv[i], "-CAfile") == 0 && i + 1 < argc) {
+            ca_file = argv[++i];
+        } else if (strcmp(argv[i], "-tls12") == 0) {
+            force_tls12 = 1;
+        } else if (strcmp(argv[i], "-tls13") == 0) {
+            force_tls13 = 1;
+        } else if (strcmp(argv[i], "-q") == 0) {
+            quiet = 1;
+        } else if (argv[i][0] != '-') {
+            target = argv[i];
+        } else {
+            fprintf(stderr, "Usage: opssl connect [-sni HOST] [-CAfile FILE] [-tls12] [-tls13] [-q] host:port\n");
+            return 1;
+        }
+    }
+
+    if (!target) {
+        fprintf(stderr, "Usage: opssl connect [-sni HOST] [-CAfile FILE] [-tls12] [-tls13] [-q] host:port\n");
+        return 1;
+    }
+
+    char host[256], port[16];
+    const char *colon = strrchr(target, ':');
+    if (!colon || colon == target) {
+        fprintf(stderr, "Error: target must be host:port\n");
+        return 1;
+    }
+
+    size_t hlen = (size_t)(colon - target);
+    if (hlen >= sizeof(host)) hlen = sizeof(host) - 1;
+    memcpy(host, target, hlen);
+    host[hlen] = '\0';
+    snprintf(port, sizeof(port), "%s", colon + 1);
+
+    if (!sni) sni = host;
+
+    if (!quiet)
+        fprintf(stderr, "Connecting to %s:%s...\n", host, port);
+
+    int fd = tcp_connect(host, port);
+    if (fd < 0) return 1;
+
+    int min_ver = 0x0303;
+    int max_ver = 0x0304;
+
+    if (force_tls12) { min_ver = 0x0303; max_ver = 0x0303; }
+    if (force_tls13) { min_ver = 0x0304; max_ver = 0x0304; }
+
+    opssl_ctx_t *ctx = opssl_ctx_new(min_ver);
+    if (!ctx) {
+        fprintf(stderr, "Error: failed to create TLS context\n");
+        close(fd);
+        return 1;
+    }
+
+    opssl_ctx_set_max_version(ctx, max_ver);
+
+    if (ca_file) {
+        if (opssl_ctx_load_verify_locations(ctx, ca_file, NULL) != 1) {
+            fprintf(stderr, "Warning: failed to load CA file %s\n", ca_file);
+        }
+    } else {
+        opssl_ctx_load_default_verify_paths(ctx);
+    }
+
+    opssl_conn_t *conn = opssl_conn_new(ctx, fd, OPSSL_DIR_OUTBOUND);
+    if (!conn) {
+        fprintf(stderr, "Error: failed to create TLS connection\n");
+        opssl_ctx_free(ctx);
+        close(fd);
+        return 1;
+    }
+
+    opssl_conn_set_sni(conn, sni);
+
+    struct pollfd pfd = { .fd = fd, .events = POLLIN | POLLOUT };
+
+    for (;;) {
+        int rc = opssl_connect(conn);
+        if (rc == OPSSL_OK_CLI) break;
+        if (rc == OPSSL_WANT_READ_CLI) {
+            pfd.events = POLLIN;
+            poll(&pfd, 1, 10000);
+        } else if (rc == OPSSL_WANT_WRITE_CLI) {
+            pfd.events = POLLOUT;
+            poll(&pfd, 1, 10000);
+        } else {
+            const char *err = opssl_conn_get_error_string(conn);
+            fprintf(stderr, "Error: TLS handshake failed: %s\n", err ? err : "unknown");
+            opssl_conn_free(conn);
+            opssl_ctx_free(ctx);
+            close(fd);
+            return 1;
+        }
+    }
+
+    if (!quiet) {
+        int ver = opssl_conn_version(conn);
+        const char *cipher = opssl_conn_cipher_name(conn);
+        fprintf(stderr, "---\n");
+        fprintf(stderr, "Protocol: %s\n", tls_version_name(ver));
+        fprintf(stderr, "Cipher:   %s\n", cipher ? cipher : "unknown");
+        fprintf(stderr, "SNI:      %s\n", sni);
+
+        opssl_x509_t *peer = opssl_conn_get_peer_cert(conn);
+        if (peer) {
+            char fp_hex[200];
+            if (opssl_x509_fingerprint_hex(peer, OPSSL_FP_SHA256, fp_hex, sizeof(fp_hex)) == 1)
+                fprintf(stderr, "Peer SHA256: %s\n", fp_hex);
+
+            char subject[500];
+            if (opssl_x509_get_subject(peer, subject, sizeof(subject)) == 1)
+                fprintf(stderr, "Subject:  %s\n", subject);
+
+            opssl_x509_free(peer);
+        }
+
+        fprintf(stderr, "---\n");
+    }
+
+    struct sigaction sa = { .sa_handler = connect_sigint };
+    sigaction(SIGINT, &sa, NULL);
+    connect_running = 1;
+
+    struct pollfd fds[2];
+    fds[0].fd = STDIN_FILENO;
+    fds[0].events = POLLIN;
+    fds[1].fd = fd;
+    fds[1].events = POLLIN;
+
+    while (connect_running) {
+        int nready = poll(fds, 2, 1000);
+        if (nready < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+
+        if (fds[0].revents & POLLIN) {
+            char buf[4096];
+            ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
+            if (n <= 0) break;
+
+            size_t written = 0;
+            while (written < (size_t)n) {
+                ssize_t w = opssl_write(conn, buf + written, n - written);
+                if (w > 0) {
+                    written += w;
+                } else if (w == OPSSL_WANT_WRITE_CLI) {
+                    struct pollfd wpfd = { .fd = fd, .events = POLLOUT };
+                    poll(&wpfd, 1, 5000);
+                } else {
+                    goto done;
+                }
+            }
+        }
+
+        if (fds[1].revents & POLLIN) {
+            char buf[4096];
+            ssize_t n = opssl_read(conn, buf, sizeof(buf));
+            if (n > 0) {
+                fwrite(buf, 1, n, stdout);
+                fflush(stdout);
+            } else if (n == 0 || n == OPSSL_CLOSED_CLI) {
+                if (!quiet)
+                    fprintf(stderr, "Connection closed by peer\n");
+                break;
+            } else if (n == OPSSL_WANT_READ_CLI) {
+                continue;
+            } else {
+                if (!quiet)
+                    fprintf(stderr, "Read error\n");
+                break;
+            }
+        }
+
+        if ((fds[0].revents | fds[1].revents) & (POLLHUP | POLLERR))
+            break;
+    }
+
+done:
+    opssl_conn_free(conn);
+    opssl_ctx_free(ctx);
+    close(fd);
+    return 0;
+}
+
 /* ─── Command Dispatch ───────────────────────────────────────────────────── */
 
 struct cmd {
@@ -1238,6 +1532,7 @@ static struct cmd commands[] = {
     {"verify", cmd_verify, "Certificate chain verification"},
     {"x509", cmd_x509, "Certificate information display"},
     {"verifier", cmd_verifier, "SCRAM verifier generation"},
+    {"connect", cmd_connect, "TLS client connect (s_client)"},
     {NULL, NULL, NULL}
 };
 
