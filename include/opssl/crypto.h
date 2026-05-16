@@ -117,9 +117,10 @@ int opssl_argon2id_verify(const uint8_t *password, size_t password_len,
 typedef struct opssl_hmac_ctx opssl_hmac_ctx_t;
 
 typedef enum {
-    OPSSL_HMAC_SHA256,
-    OPSSL_HMAC_SHA384,
-    OPSSL_HMAC_SHA512,
+    OPSSL_HMAC_SHA256 = 0,
+    OPSSL_HMAC_SHA384 = 1,
+    OPSSL_HMAC_SHA512 = 2,
+    OPSSL_HMAC_SHA1   = 3,
 } opssl_hmac_algo_t;
 
 int  opssl_hmac_init(opssl_hmac_ctx_t *ctx, opssl_hmac_algo_t algo,

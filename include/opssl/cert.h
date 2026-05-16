@@ -23,6 +23,9 @@ typedef struct opssl_x509_chain opssl_x509_chain_t;
 
 opssl_x509_chain_t *opssl_x509_chain_from_file(const char *path);
 opssl_x509_chain_t *opssl_x509_chain_from_leaf(const uint8_t *der, size_t der_len);
+opssl_x509_chain_t *opssl_x509_chain_from_ders(const uint8_t *der, size_t der_len,
+                                                const uint8_t * const *intermediates,
+                                                const size_t *ilens, size_t n_intermediates);
 size_t              opssl_x509_chain_count(const opssl_x509_chain_t *chain);
 opssl_x509_t       *opssl_x509_chain_get(const opssl_x509_chain_t *chain, size_t idx);
 void                opssl_x509_chain_free(opssl_x509_chain_t *chain);

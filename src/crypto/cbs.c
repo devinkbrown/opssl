@@ -357,6 +357,10 @@ opssl_cbb_flush(opssl_cbb_t *cbb)
         return 1;
 
     opssl_cbb_t *parent = cbb->parent;
+    if (cbb->len < cbb->offset + cbb->prefix_len) {
+        cbb->error = 1;
+        return 0;
+    }
     size_t child_len = cbb->len - (cbb->offset + cbb->prefix_len);
 
     if (cbb->prefix_len == 1) {

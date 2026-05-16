@@ -58,6 +58,7 @@ typedef enum {
     OPSSL_HMAC_SHA256 = 0,
     OPSSL_HMAC_SHA384 = 1,
     OPSSL_HMAC_SHA512 = 2,
+    OPSSL_HMAC_SHA1   = 3,
 } opssl_hmac_algo_t;
 
 extern int opssl_hmac(opssl_hmac_algo_t algo, const uint8_t *key, size_t key_len,
@@ -705,12 +706,13 @@ static int cmd_hmac(int argc, char **argv)
             case 'k': key_hex = optarg; break;
             case 'a': algo_str = optarg; break;
             default:
-                fprintf(stderr, "Usage: opssl hmac [-a sha256|sha384|sha512] -k hex_key [file...]\n");
+                fprintf(stderr, "Usage: opssl hmac [-a sha1|sha256|sha384|sha512] -k hex_key [file...]\n");
                 return 1;
         }
     }
 
-    if (strcmp(algo_str, "sha256") == 0) algo = OPSSL_HMAC_SHA256;
+    if (strcmp(algo_str, "sha1") == 0) algo = OPSSL_HMAC_SHA1;
+    else if (strcmp(algo_str, "sha256") == 0) algo = OPSSL_HMAC_SHA256;
     else if (strcmp(algo_str, "sha384") == 0) algo = OPSSL_HMAC_SHA384;
     else if (strcmp(algo_str, "sha512") == 0) algo = OPSSL_HMAC_SHA512;
 
@@ -1036,7 +1038,7 @@ static int cmd_verify(int argc, char **argv)
     }
 
     opssl_x509_store_t *store = opssl_x509_store_new();
-    if (!store || opssl_x509_store_load_file(store, ca_file) != 1) {
+    if (!store || opssl_x509_store_load_file(store, ca_file) <= 0) {
         fprintf(stderr, "Error: failed to load CA store\n");
         return 1;
     }
@@ -1054,7 +1056,9 @@ static int cmd_verify(int argc, char **argv)
     if (verify_result == 1) {
         printf("Verification: OK\n");
     } else {
-        printf("Verification failed: %s\n", result.error_string ? result.error_string : "unknown error");
+        printf("Verification failed: %s (code=%d)\n",
+               result.error_string ? result.error_string : "unknown error",
+               result.error_code);
     }
 
     opssl_x509_chain_free(chain);

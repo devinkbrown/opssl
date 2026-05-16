@@ -861,18 +861,18 @@ sc25519_reduce(uint8_t out[32], const uint8_t in[64])
     s10 += s18 * 136657;  s11 -= s18 * 683901;  s18 = 0;
 
     /* Intermediate carry propagation to prevent overflow in phase 2 */
-    carry = (s6  + (1LL << 20)) >> 21; s7  += carry; s6  -= carry << 21;
-    carry = (s8  + (1LL << 20)) >> 21; s9  += carry; s8  -= carry << 21;
-    carry = (s10 + (1LL << 20)) >> 21; s11 += carry; s10 -= carry << 21;
-    carry = (s12 + (1LL << 20)) >> 21; s13 += carry; s12 -= carry << 21;
-    carry = (s14 + (1LL << 20)) >> 21; s15 += carry; s14 -= carry << 21;
-    carry = (s16 + (1LL << 20)) >> 21; s17 += carry; s16 -= carry << 21;
+    carry = (s6  + (1LL << 20)) >> 21; s7  += carry; s6  -= carry * (1LL << 21);
+    carry = (s8  + (1LL << 20)) >> 21; s9  += carry; s8  -= carry * (1LL << 21);
+    carry = (s10 + (1LL << 20)) >> 21; s11 += carry; s10 -= carry * (1LL << 21);
+    carry = (s12 + (1LL << 20)) >> 21; s13 += carry; s12 -= carry * (1LL << 21);
+    carry = (s14 + (1LL << 20)) >> 21; s15 += carry; s14 -= carry * (1LL << 21);
+    carry = (s16 + (1LL << 20)) >> 21; s17 += carry; s16 -= carry * (1LL << 21);
 
-    carry = (s7  + (1LL << 20)) >> 21; s8  += carry; s7  -= carry << 21;
-    carry = (s9  + (1LL << 20)) >> 21; s10 += carry; s9  -= carry << 21;
-    carry = (s11 + (1LL << 20)) >> 21; s12 += carry; s11 -= carry << 21;
-    carry = (s13 + (1LL << 20)) >> 21; s14 += carry; s13 -= carry << 21;
-    carry = (s15 + (1LL << 20)) >> 21; s16 += carry; s15 -= carry << 21;
+    carry = (s7  + (1LL << 20)) >> 21; s8  += carry; s7  -= carry * (1LL << 21);
+    carry = (s9  + (1LL << 20)) >> 21; s10 += carry; s9  -= carry * (1LL << 21);
+    carry = (s11 + (1LL << 20)) >> 21; s12 += carry; s11 -= carry * (1LL << 21);
+    carry = (s13 + (1LL << 20)) >> 21; s14 += carry; s13 -= carry * (1LL << 21);
+    carry = (s15 + (1LL << 20)) >> 21; s16 += carry; s15 -= carry * (1LL << 21);
 
     /* Phase 2: reduce s17..s12 into s0..s11 */
     s5  += s17 * 666643;  s6  += s17 * 470296;
@@ -900,19 +900,19 @@ sc25519_reduce(uint8_t out[32], const uint8_t in[64])
     s4  += s12 * 136657;  s5  -= s12 * 683901;  s12 = 0;
 
     /* Carry propagation */
-    carry = (s0  + (1LL << 20)) >> 21; s1  += carry; s0  -= carry << 21;
-    carry = (s2  + (1LL << 20)) >> 21; s3  += carry; s2  -= carry << 21;
-    carry = (s4  + (1LL << 20)) >> 21; s5  += carry; s4  -= carry << 21;
-    carry = (s6  + (1LL << 20)) >> 21; s7  += carry; s6  -= carry << 21;
-    carry = (s8  + (1LL << 20)) >> 21; s9  += carry; s8  -= carry << 21;
-    carry = (s10 + (1LL << 20)) >> 21; s11 += carry; s10 -= carry << 21;
+    carry = (s0  + (1LL << 20)) >> 21; s1  += carry; s0  -= carry * (1LL << 21);
+    carry = (s2  + (1LL << 20)) >> 21; s3  += carry; s2  -= carry * (1LL << 21);
+    carry = (s4  + (1LL << 20)) >> 21; s5  += carry; s4  -= carry * (1LL << 21);
+    carry = (s6  + (1LL << 20)) >> 21; s7  += carry; s6  -= carry * (1LL << 21);
+    carry = (s8  + (1LL << 20)) >> 21; s9  += carry; s8  -= carry * (1LL << 21);
+    carry = (s10 + (1LL << 20)) >> 21; s11 += carry; s10 -= carry * (1LL << 21);
 
-    carry = (s1  + (1LL << 20)) >> 21; s2  += carry; s1  -= carry << 21;
-    carry = (s3  + (1LL << 20)) >> 21; s4  += carry; s3  -= carry << 21;
-    carry = (s5  + (1LL << 20)) >> 21; s6  += carry; s5  -= carry << 21;
-    carry = (s7  + (1LL << 20)) >> 21; s8  += carry; s7  -= carry << 21;
-    carry = (s9  + (1LL << 20)) >> 21; s10 += carry; s9  -= carry << 21;
-    carry = (s11 + (1LL << 20)) >> 21; s12 += carry; s11 -= carry << 21;
+    carry = (s1  + (1LL << 20)) >> 21; s2  += carry; s1  -= carry * (1LL << 21);
+    carry = (s3  + (1LL << 20)) >> 21; s4  += carry; s3  -= carry * (1LL << 21);
+    carry = (s5  + (1LL << 20)) >> 21; s6  += carry; s5  -= carry * (1LL << 21);
+    carry = (s7  + (1LL << 20)) >> 21; s8  += carry; s7  -= carry * (1LL << 21);
+    carry = (s9  + (1LL << 20)) >> 21; s10 += carry; s9  -= carry * (1LL << 21);
+    carry = (s11 + (1LL << 20)) >> 21; s12 += carry; s11 -= carry * (1LL << 21);
 
     /* Reduce residual s12 */
     s0  += s12 * 666643;
@@ -924,17 +924,17 @@ sc25519_reduce(uint8_t out[32], const uint8_t in[64])
     s12 = 0;
 
     /* Final carry chain — unbiased shift to ensure non-negative limbs */
-    carry = s0  >> 21; s1  += carry; s0  -= carry << 21;
-    carry = s1  >> 21; s2  += carry; s1  -= carry << 21;
-    carry = s2  >> 21; s3  += carry; s2  -= carry << 21;
-    carry = s3  >> 21; s4  += carry; s3  -= carry << 21;
-    carry = s4  >> 21; s5  += carry; s4  -= carry << 21;
-    carry = s5  >> 21; s6  += carry; s5  -= carry << 21;
-    carry = s6  >> 21; s7  += carry; s6  -= carry << 21;
-    carry = s7  >> 21; s8  += carry; s7  -= carry << 21;
-    carry = s8  >> 21; s9  += carry; s8  -= carry << 21;
-    carry = s9  >> 21; s10 += carry; s9  -= carry << 21;
-    carry = s10 >> 21; s11 += carry; s10 -= carry << 21;
+    carry = s0  >> 21; s1  += carry; s0  -= carry * (1LL << 21);
+    carry = s1  >> 21; s2  += carry; s1  -= carry * (1LL << 21);
+    carry = s2  >> 21; s3  += carry; s2  -= carry * (1LL << 21);
+    carry = s3  >> 21; s4  += carry; s3  -= carry * (1LL << 21);
+    carry = s4  >> 21; s5  += carry; s4  -= carry * (1LL << 21);
+    carry = s5  >> 21; s6  += carry; s5  -= carry * (1LL << 21);
+    carry = s6  >> 21; s7  += carry; s6  -= carry * (1LL << 21);
+    carry = s7  >> 21; s8  += carry; s7  -= carry * (1LL << 21);
+    carry = s8  >> 21; s9  += carry; s8  -= carry * (1LL << 21);
+    carry = s9  >> 21; s10 += carry; s9  -= carry * (1LL << 21);
+    carry = s10 >> 21; s11 += carry; s10 -= carry * (1LL << 21);
 
     /* If result is negative (congruent to x mod L but < 0), add L */
     int64_t neg_mask = s11 >> 63;
@@ -946,17 +946,17 @@ sc25519_reduce(uint8_t out[32], const uint8_t in[64])
     s5  += neg_mask & 683900;
     s11 += neg_mask & 2097152;
 
-    carry = s0  >> 21; s1  += carry; s0  -= carry << 21;
-    carry = s1  >> 21; s2  += carry; s1  -= carry << 21;
-    carry = s2  >> 21; s3  += carry; s2  -= carry << 21;
-    carry = s3  >> 21; s4  += carry; s3  -= carry << 21;
-    carry = s4  >> 21; s5  += carry; s4  -= carry << 21;
-    carry = s5  >> 21; s6  += carry; s5  -= carry << 21;
-    carry = s6  >> 21; s7  += carry; s6  -= carry << 21;
-    carry = s7  >> 21; s8  += carry; s7  -= carry << 21;
-    carry = s8  >> 21; s9  += carry; s8  -= carry << 21;
-    carry = s9  >> 21; s10 += carry; s9  -= carry << 21;
-    carry = s10 >> 21; s11 += carry; s10 -= carry << 21;
+    carry = s0  >> 21; s1  += carry; s0  -= carry * (1LL << 21);
+    carry = s1  >> 21; s2  += carry; s1  -= carry * (1LL << 21);
+    carry = s2  >> 21; s3  += carry; s2  -= carry * (1LL << 21);
+    carry = s3  >> 21; s4  += carry; s3  -= carry * (1LL << 21);
+    carry = s4  >> 21; s5  += carry; s4  -= carry * (1LL << 21);
+    carry = s5  >> 21; s6  += carry; s5  -= carry * (1LL << 21);
+    carry = s6  >> 21; s7  += carry; s6  -= carry * (1LL << 21);
+    carry = s7  >> 21; s8  += carry; s7  -= carry * (1LL << 21);
+    carry = s8  >> 21; s9  += carry; s8  -= carry * (1LL << 21);
+    carry = s9  >> 21; s10 += carry; s9  -= carry * (1LL << 21);
+    carry = s10 >> 21; s11 += carry; s10 -= carry * (1LL << 21);
 
     out[0]  = (uint8_t)(s0);
     out[1]  = (uint8_t)(s0 >> 8);
