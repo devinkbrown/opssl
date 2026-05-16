@@ -1788,6 +1788,19 @@ int opssl_tls13_client_handshake(void *hs_opaque, uint8_t *buf, size_t buf_len,
             return OPSSL_ERROR;
         }
 
+        /* Free unused secondary ECDH context (P-256 generated but X25519 selected) */
+        if (hs->secondary_group == NAMED_GROUP_SECP256R1 ||
+            hs->secondary_group == NAMED_GROUP_SECP384R1) {
+            if (hs->group != hs->secondary_group) {
+                opssl_ecdh_ctx_t *sec_ecdh;
+                memcpy(&sec_ecdh, hs->secondary_priv, sizeof(sec_ecdh));
+                if (sec_ecdh)
+                    opssl_ecdh_free(sec_ecdh);
+                memset(hs->secondary_priv, 0, sizeof(hs->secondary_priv));
+                hs->secondary_group = 0;
+            }
+        }
+
         /* Derive handshake secrets */
         if (tls13_derive_handshake_secrets(hs) != 0) {
             return OPSSL_ERROR;

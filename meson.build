@@ -277,10 +277,14 @@ opssl_dep = declare_dependency(
 )
 
 # CLI tool — unified opssl command (replaces legacy mkdhparam, mkfingerprint, mkverifier)
+_opssl_install_rpath = get_option('prefix') / get_option('libdir')
+
 opssl_cli = executable('opssl',
   'tools/opssl.c',
   dependencies: [opssl_dep, libop_dep, threads_dep],
   install: true,
+  install_rpath: _opssl_install_rpath,
+  build_rpath: meson.current_build_dir(),
 )
 
 # Install headers

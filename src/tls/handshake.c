@@ -518,6 +518,8 @@ opssl_result_t opssl_accept(opssl_conn_t *conn)
 
             case TLS_RT_CHANGE_CIPHER_SPEC:
                 conn->read_len = 0;
+                if (!conn->is_tls13 && conn->read_cipher)
+                    conn->read_encrypted = true;
                 break;
 
             case TLS_RT_ALERT:
@@ -659,6 +661,8 @@ opssl_result_t opssl_connect(opssl_conn_t *conn)
 
         case TLS_RT_CHANGE_CIPHER_SPEC:
             conn->read_len = 0;
+            if (!conn->is_tls13 && conn->read_cipher)
+                conn->read_encrypted = true;
             break;
 
         case TLS_RT_ALERT:
@@ -1242,7 +1246,9 @@ opssl_named_group_t opssl_conn_group(opssl_conn_t *conn)
 
 opssl_x509_t *opssl_conn_get_peer_cert(opssl_conn_t *conn)
 {
-    return conn ? conn->peer_cert : NULL;
+    if (!conn || !conn->peer_cert)
+        return NULL;
+    return opssl_x509_ref(conn->peer_cert);
 }
 
 int opssl_conn_get_fingerprint(opssl_conn_t *conn,
@@ -2319,6 +2325,9 @@ static opssl_result_t handle_tls12_handshake(opssl_conn_t *conn)
                 opssl_tls12_set_sni(conn->hs_buf, conn->sni);
             if (alpn_protos && alpn_count > 0)
                 opssl_tls12_set_alpn_offer(conn->hs_buf, alpn_protos, alpn_count);
+            extern void opssl_tls12_set_tls13_capable(void *, bool);
+            if (opssl_ctx_supports_version(conn->ctx, OPSSL_TLS_1_3))
+                opssl_tls12_set_tls13_capable(conn->hs_buf, true);
         }
     }
 
@@ -2356,10 +2365,23 @@ static opssl_result_t handle_tls12_handshake(opssl_conn_t *conn)
          * Split: send CKE as handshake, then CCS, then Finished as handshake.
          * For server: output from FINISHED is just server Finished — send CCS first. */
         if (cur_state == OPSSL_HS_COMPLETE && prev_state == OPSSL_HS_FINISHED) {
-            /* Server sending Finished: CCS first */
+            /* Server sending Finished: CCS first, then write encrypted Finished */
             uint8_t ccs_byte = 1;
             opssl_result_t wr = write_record(conn, TLS_RT_CHANGE_CIPHER_SPEC, &ccs_byte, 1);
             if (wr != OPSSL_OK) return wr;
+
+            if (!conn->is_tls13 && !conn->write_cipher) {
+                uint8_t ck[32], sk[32], ci[12], si[12];
+                size_t ckl, skl, cil, sil;
+                opssl_ciphersuite_t cip;
+                if (opssl_tls12_extract_traffic_keys(conn->hs_buf,
+                        ck, &ckl, sk, &skl, ci, &cil, si, &sil, &cip) == OPSSL_OK) {
+                    setup_cipher_contexts(conn, ck, ckl, sk, skl,
+                                         ci, cil, si, sil, cip, TLS_EPOCH_APPLICATION);
+                }
+            }
+            conn->write_encrypted = true;
+
             wr = write_record(conn, TLS_RT_HANDSHAKE, out_data, out_len);
             if (wr != OPSSL_OK) return wr;
         } else if (cur_state == OPSSL_HS_FINISHED && prev_state == OPSSL_HS_CLIENT_HELLO &&
@@ -2380,11 +2402,44 @@ static opssl_result_t handle_tls12_handshake(opssl_conn_t *conn)
             uint8_t ccs_byte = 1;
             wr = write_record(conn, TLS_RT_CHANGE_CIPHER_SPEC, &ccs_byte, 1);
             if (wr != OPSSL_OK) return wr;
+
+            /* TLS 1.2: enable write-side encryption before sending Finished.
+             * Read-side stays unencrypted until server's CCS arrives. */
+            {
+                uint8_t ck[32], sk[32], ci[12], si[12];
+                size_t ckl, skl, cil, sil;
+                opssl_ciphersuite_t cip;
+                int kr = opssl_tls12_extract_traffic_keys(conn->hs_buf,
+                        ck, &ckl, sk, &skl, ci, &cil, si, &sil, &cip);
+                if (kr == OPSSL_OK) {
+                    setup_cipher_contexts(conn, ck, ckl, sk, skl,
+                                         ci, cil, si, sil, cip, TLS_EPOCH_APPLICATION);
+                    conn->read_encrypted = false;
+                }
+            }
+
             wr = write_record(conn, TLS_RT_HANDSHAKE, out_data + cke_len, fin_size);
             if (wr != OPSSL_OK) return wr;
         } else {
             opssl_result_t wr = write_record(conn, TLS_RT_HANDSHAKE, out_data, out_len);
             if (wr != OPSSL_OK) return wr;
+        }
+    }
+
+    /* Server: after CKE processing (SERVER_HELLO→FINISHED), set up cipher contexts
+     * so read_cipher is ready before CCS arrives from the client.
+     * Don't enable encryption yet — CCS handler enables read, server CCS enables write. */
+    if (conn->dir == OPSSL_SERVER && cur_state == OPSSL_HS_FINISHED &&
+        prev_state == OPSSL_HS_SERVER_HELLO && !conn->read_cipher) {
+        uint8_t ck[32], sk[32], ci[12], si[12];
+        size_t ckl, skl, cil, sil;
+        opssl_ciphersuite_t cip;
+        if (opssl_tls12_extract_traffic_keys(conn->hs_buf,
+                ck, &ckl, sk, &skl, ci, &cil, si, &sil, &cip) == OPSSL_OK) {
+            setup_cipher_contexts(conn, ck, ckl, sk, skl,
+                                 ci, cil, si, sil, cip, TLS_EPOCH_APPLICATION);
+            conn->read_encrypted = false;
+            conn->write_encrypted = false;
         }
     }
 

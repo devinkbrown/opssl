@@ -1183,11 +1183,28 @@ int opssl_x509_verify(const opssl_x509_chain_t *chain, const opssl_x509_store_t 
         }
     }
 
-    /* 3. Verify chain signatures */
+    /* 3. Verify chain signatures — stop early if a chain cert is a trust anchor */
     opssl_x509_t *current = leaf;
     opssl_x509_t *issuer = NULL;
 
     for (size_t i = 0; i < chain->count; i++) {
+        /* If the current cert's SPKI matches a trust anchor, accept it
+         * (handles cross-signed roots that differ in DER but share the same key) */
+        if (i > 0) {
+            const uint8_t *cur_spki;
+            size_t cur_spki_len;
+            if (opssl_x509_get_spki_der(current, &cur_spki, &cur_spki_len)) {
+                for (size_t j = 0; j < store->count; j++) {
+                    const uint8_t *tspki;
+                    size_t tspki_len;
+                    if (opssl_x509_get_spki_der(store->trusted[j], &tspki, &tspki_len) &&
+                        tspki_len == cur_spki_len &&
+                        memcmp(tspki, cur_spki, cur_spki_len) == 0)
+                        goto chain_trusted;
+                }
+            }
+        }
+
         if (i + 1 < chain->count) {
             issuer = chain->certs[i + 1];
         } else {
@@ -1300,6 +1317,7 @@ int opssl_x509_verify(const opssl_x509_chain_t *chain, const opssl_x509_store_t 
         return 0;
     }
 
+chain_trusted:
     /* 5. Intermediate CA validity checks */
     for (size_t i = 1; i < chain->count; i++) {
         /* Must have BasicConstraints cA=TRUE */

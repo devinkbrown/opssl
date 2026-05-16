@@ -12,6 +12,7 @@
 #define OPSSL_CERT_H
 
 #include <opssl/types.h>
+#include <opssl/crypto.h>
 
 /* --- Certificate Loading ------------------------------------------------- */
 
@@ -150,6 +151,7 @@ typedef enum {
 } opssl_pkey_type_t;
 
 opssl_pkey_type_t opssl_pkey_type(const opssl_pkey_t *key);
+opssl_curve_t     opssl_pkey_ec_curve(const opssl_pkey_t *key);
 size_t            opssl_pkey_bits(const opssl_pkey_t *key);
 int               opssl_pkey_sign(const opssl_pkey_t *key, const uint8_t *digest,
                                   size_t digest_len, uint8_t *sig, size_t *sig_len);

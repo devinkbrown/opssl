@@ -713,6 +713,14 @@ opssl_pkey_type(const opssl_pkey_t *key)
     return key ? key->type : OPSSL_PKEY_RSA;
 }
 
+opssl_curve_t
+opssl_pkey_ec_curve(const opssl_pkey_t *key)
+{
+    if (!key || key->type != OPSSL_PKEY_EC)
+        return (opssl_curve_t)0;
+    return key->key.ec.curve;
+}
+
 size_t
 opssl_pkey_bits(const opssl_pkey_t *key)
 {
