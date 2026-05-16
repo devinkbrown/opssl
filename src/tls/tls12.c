@@ -731,8 +731,7 @@ build_server_certificate(tls12_hs_t *hs, opssl_cbb_t *cbb)
 
         opssl_cbb_t cert_entry;
         if (!opssl_cbb_add_u24_length_prefixed(&cert_list, &cert_entry) ||
-            !opssl_cbb_add_bytes(&cert_entry, der, der_len) ||
-            !opssl_cbb_flush(&cert_list)) {
+            !opssl_cbb_add_bytes(&cert_entry, der, der_len)) {
             opssl_x509_free(cert);
             return 0;
         }
